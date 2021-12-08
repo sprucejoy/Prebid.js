@@ -4,8 +4,8 @@
   "description": "Header Bidding Management Library",
   "main": "src/prebid.js",
   "scripts": {
-    "build:epj": "gulp build --modules=epj-modules.json",
-    "build:opj": "gulp build --modules=opj-modules.json",
+    "build:epj": "gulp build --modules=config/epj-modules.json",
+    "build:opj": "gulp build --modules=config/opj-modules.json",
     "test": "gulp test",
     "lint": "gulp lint"
   },
