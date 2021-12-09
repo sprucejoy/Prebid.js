@@ -1,6 +1,7 @@
 # Built Files
 node_modules/
 build
+dist
 
 # Test Files
 test/app
@@ -80,3 +81,6 @@ typings/
 
 # MacOS system files
 .DS_Store
+
+# dotenv environment variables file
+.env
