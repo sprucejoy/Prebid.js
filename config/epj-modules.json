@@ -1,0 +1,21 @@
+[
+    "medianetBidAdapter",
+    "justpremiumBidAdapter",
+    "richaudienceBidAdapter",
+    "tripleliftBidAdapter",
+    "conversantBidAdapter",
+    "adtelligentBidAdapter",
+    "underdogmediaBidAdapter",
+    "unrulyBidAdapter",
+    "sovrnBidAdapter",
+    "nobidBidAdapter",
+    "appnexusBidAdapter", 
+    "emx_digitalBidAdapter",
+    "id5IdSystem",
+    "criteoIdSystem",
+    "sharedIdSystem",
+    "uid2IdSystem",
+    "gptPreAuction",
+    "enrichmentFpdModule",
+    "consentManagementUsp"
+  ]
