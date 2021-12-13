@@ -43,8 +43,8 @@ async function start() {
 
   // const files = await globby(["**/*.*"], { cwd: filesDir });
   const files = [
-    ["epj_prebid.min.js", "test/epj_prebid.min.js"],
-    ["opj_prebid.min.js", "test/opj_prebid.min.js"],
+    ["epj_prebid.min.js", "epj_prebid.min.js"],
+    ["opj_prebid.min.js", "opj_prebid.min.js"],
   ];
 
   console.log("Total number of files:", files.length);
