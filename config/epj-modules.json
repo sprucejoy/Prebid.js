@@ -1,6 +1,7 @@
 [
     "medianetBidAdapter",
     "justpremiumBidAdapter",
+    "zetaSspBidAdapter",
     "richaudienceBidAdapter",
     "tripleliftBidAdapter",
     "conversantBidAdapter",
