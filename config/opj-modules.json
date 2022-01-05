@@ -1,7 +1,7 @@
 [
     "medianetBidAdapter",
     "justpremiumBidAdapter",
-    "zetaSspBidAdapter",
+    "zeta_global_sspBidAdapter",
     "richaudienceBidAdapter",
     "adtelligentBidAdapter",
     "underdogmediaBidAdapter",
