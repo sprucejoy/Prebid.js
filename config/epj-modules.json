@@ -12,6 +12,7 @@
     "nobidBidAdapter",
     "appnexusBidAdapter", 
     "emx_digitalBidAdapter",
+    "dfpAdServerVideo",
     "id5IdSystem",
     "criteoIdSystem",
     "sharedIdSystem",
