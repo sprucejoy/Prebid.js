@@ -9,6 +9,7 @@
     "tripleliftBidAdapter",
     "nobidBidAdapter",
     "appnexusBidAdapter", 
+    "priceFloors",
     "dfpAdServerVideo",
     "id5IdSystem",
     "criteoIdSystem",

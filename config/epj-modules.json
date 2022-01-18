@@ -12,6 +12,8 @@
     "nobidBidAdapter",
     "appnexusBidAdapter", 
     "emx_digitalBidAdapter",
+    "aniviewBidAdapter",
+    "priceFloors",
     "dfpAdServerVideo",
     "id5IdSystem",
     "criteoIdSystem",
