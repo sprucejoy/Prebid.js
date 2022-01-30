@@ -9,6 +9,7 @@
     "build:opj": "gulp build --modules=config/opj-modules.json",
     "build": "bash scripts/buildPrebid.js.sh",
     "deploy": "npm run build && npm run deploy:bunny",
+    "build:all": "gulp build",
     "test": "gulp test",
     "lint": "gulp lint"
   },
