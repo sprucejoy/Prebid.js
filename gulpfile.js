@@ -155,6 +155,10 @@ function gulpBundle(dev) {
   return bundle(dev).pipe(gulp.dest('build/' + (dev ? 'dev' : 'dist')));
 }
 
+function gulpCustomBundle(dev) {
+  return bundle(dev).pipe(gulp.dest('dist'));
+}
+
 function nodeBundle(modules) {
   return new Promise((resolve, reject) => {
     bundle(false, modules)
@@ -422,6 +426,7 @@ gulp.task('e2e-test', gulp.series(clean, setupE2e, gulp.parallel('build-bundle-p
 // other tasks
 gulp.task(bundleToStdout);
 gulp.task('bundle', gulpBundle.bind(null, false)); // used for just concatenating pre-built files with no build step
+gulp.task('custom-bundle', gulpCustomBundle.bind(null, false));
 
 // build task for reviewers, runs test-coverage, serves, without watching
 gulp.task(viewReview);
