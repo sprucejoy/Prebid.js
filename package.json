@@ -1,6 +1,6 @@
 {
   "name": "prebid.js",
-  "version": "5.20.1-pre",
+  "version": "5.20.3",
   "description": "Header Bidding Management Library",
   "main": "src/prebid.js",
   "scripts": {
@@ -9,6 +9,9 @@
     "build:opj": "gulp build --modules=config/opj-modules.json",
     "build": "bash scripts/buildPrebid.js.sh",
     "deploy": "npm run build && npm run deploy:bunny",
+    "build:all": "gulp build",
+    "bundle:epj": "gulp custom-bundle --bundleName=epj_prebid.min.js --modules=config/epj-modules.json",
+    "bundle:opj": "gulp custom-bundle --bundleName=opj_prebid.min.js --modules=config/opj-modules.json",
     "test": "gulp test",
     "lint": "gulp lint"
   },
