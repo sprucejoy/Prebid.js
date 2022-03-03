@@ -5,6 +5,8 @@
     "richaudienceBidAdapter",
     "underdogmediaBidAdapter",
     "unrulyBidAdapter",
+    "conversantBidAdapter",
+    "adyoulikeBidAdapter",
     "tripleliftBidAdapter",
     "appnexusBidAdapter", 
     "apacdexBidAdapter", 
