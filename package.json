@@ -4,7 +4,7 @@
   "description": "Header Bidding Management Library",
   "main": "src/prebid.js",
   "scripts": {
-    "deploy:bunny": "node scripts/deploy2Bunny.mjs",
+    "deploy:bunny": "bash scripts/deploy.sh",
     "build:epj": "gulp build --modules=config/epj-modules.json",
     "build:opj": "gulp build --modules=config/opj-modules.json",
     "build": "bash scripts/buildPrebid.js.sh",
