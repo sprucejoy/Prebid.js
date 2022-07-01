@@ -1,19 +1,37 @@
-import { deepAccess, parseGPTSingleSizeArray, inIframe, deepClone, logError, logWarn, isFn, contains, isInteger, isArray, deepSetValue, parseQueryStringParameters, isEmpty, mergeDeep, convertTypes, hasDeviceAccess } from '../src/utils.js';
-import { BANNER, VIDEO } from '../src/mediaTypes.js';
-import { config } from '../src/config.js';
+import {
+  contains,
+  convertTypes,
+  deepAccess,
+  deepClone,
+  deepSetValue,
+  getGptSlotInfoForAdUnitCode,
+  hasDeviceAccess,
+  inIframe,
+  isArray,
+  isEmpty,
+  isFn,
+  isInteger,
+  logError,
+  logWarn,
+  mergeDeep,
+  parseGPTSingleSizeArray,
+  parseQueryStringParameters
+} from '../src/utils.js';
+import {BANNER, VIDEO} from '../src/mediaTypes.js';
+import {config} from '../src/config.js';
 import CONSTANTS from '../src/constants.json';
-import { getStorageManager, validateStorageEnforcement } from '../src/storageManager.js';
-import events from '../src/events.js';
-import find from 'core-js-pure/features/array/find.js';
-import { registerBidder } from '../src/adapters/bidderFactory.js';
-import { INSTREAM, OUTSTREAM } from '../src/video.js';
-import includes from 'core-js-pure/features/array/includes.js';
-import { Renderer } from '../src/Renderer.js';
+import {getStorageManager, validateStorageEnforcement} from '../src/storageManager.js';
+import * as events from '../src/events.js';
+import {find, includes} from '../src/polyfill.js';
+import {registerBidder} from '../src/adapters/bidderFactory.js';
+import {INSTREAM, OUTSTREAM} from '../src/video.js';
+import {Renderer} from '../src/Renderer.js';
 
 const BIDDER_CODE = 'ix';
 const ALIAS_BIDDER_CODE = 'roundel';
 const GLOBAL_VENDOR_ID = 10;
-const SECURE_BID_URL = 'https://htlb.casalemedia.com/cygnus';
+const MODULE_TYPE = 'bid-adapter';
+const SECURE_BID_URL = 'https://htlb.casalemedia.com/openrtb/pbjs';
 const SUPPORTED_AD_TYPES = [BANNER, VIDEO];
 const BANNER_ENDPOINT_VERSION = 7.2;
 const VIDEO_ENDPOINT_VERSION = 8.1;
@@ -23,11 +41,12 @@ const VIDEO_TIME_TO_LIVE = 3600; // 1hr
 const NET_REVENUE = true;
 const MAX_REQUEST_SIZE = 8000;
 const MAX_REQUEST_LIMIT = 4;
+const OUTSTREAM_MINIMUM_PLAYER_SIZE = [300, 250];
 const PRICE_TO_DOLLAR_FACTOR = {
   JPY: 1
 };
 const USER_SYNC_URL = 'https://js-sec.indexww.com/um/ixmatch.html';
-const RENDERER_URL = 'https://js-sec.indexww.com/htv/video-player.js';
+
 const FLOOR_SOURCE = { PBJS: 'p', IX: 'x' };
 export const ERROR_CODES = {
   BID_SIZE_INVALID_FORMAT: 1,
@@ -84,7 +103,7 @@ const VIDEO_PARAMS_ALLOW_LIST = [
 ];
 const LOCAL_STORAGE_KEY = 'ixdiag';
 let hasRegisteredHandler = false;
-export const storage = getStorageManager(GLOBAL_VENDOR_ID, BIDDER_CODE);
+export const storage = getStorageManager({gvlid: GLOBAL_VENDOR_ID, bidderCode: BIDDER_CODE});
 
 // Possible values for bidResponse.seatBid[].bid[].mtype which indicates the type of the creative markup so that it can properly be associated with the right sub-object of the BidRequest.Imp.
 const MEDIA_TYPES = {
@@ -818,7 +837,8 @@ function buildIXDiag(validBidRequests) {
     allu: 0,
     ren: false,
     version: '$prebid.version$',
-    userIds: _getUserIds(validBidRequests[0])
+    userIds: _getUserIds(validBidRequests[0]),
+    url: window.location.href.split('?')[0]
   };
 
   // create ad unit map and collect the required diag properties
@@ -840,12 +860,10 @@ function buildIXDiag(validBidRequests) {
 
       if (deepAccess(bid, 'mediaTypes.video.context') === 'outstream') {
         ixdiag.ou++;
-        // renderer only needed for outstream
 
-        const hasRenderer = typeof (deepAccess(bid, 'renderer') || deepAccess(bid, 'mediaTypes.video.renderer')) === 'object';
-
-        // if any one ad unit is missing renderer, set ren status to false in diag
-        ixdiag.ren = ixdiag.ren && hasRenderer ? (deepAccess(ixdiag, 'ren')) : hasRenderer;
+        if (isIndexRendererPreferred(bid)) {
+          ixdiag.ren = true;
+        }
       }
 
       if (deepAccess(bid, 'mediaTypes.video.context') === 'instream') {
@@ -950,7 +968,7 @@ function getPageUrl() {
  * @returns {string}
  */
 function detectParamsType(validBidRequest) {
-  if (deepAccess(validBidRequest, 'params.video') && deepAccess(validBidRequest, 'mediaTypes.video')) {
+  if (deepAccess(validBidRequest, 'mediaTypes.video') && bidToVideoImp(validBidRequest).video) {
     return VIDEO;
   }
 
@@ -1069,7 +1087,7 @@ function localStorageHandler(data) {
       hasEnforcementHook: false,
       valid: hasDeviceAccess()
     };
-    validateStorageEnforcement(GLOBAL_VENDOR_ID, BIDDER_CODE, DEFAULT_ENFORCEMENT_SETTINGS, (permissions) => {
+    validateStorageEnforcement(GLOBAL_VENDOR_ID, BIDDER_CODE, MODULE_TYPE, DEFAULT_ENFORCEMENT_SETTINGS, (permissions) => {
       if (permissions.valid) {
         storeErrorEventData(data);
       }
@@ -1112,24 +1130,18 @@ function getCachedErrors() {
 
 /**
  *
- * Initialize Outstream Renderer
+ * Initialize IX Outstream Renderer
  * @param {Object} bid
  */
 function outstreamRenderer(bid) {
-  bid.renderer.push(() => {
-    var config = {
-      width: bid.width,
-      height: bid.height,
-      timeout: 3000
-    };
-
-    // IXOutstreamPlayer supports both vastUrl and vastXml, so we can pass either.
-    // Since vastUrl is going to be deprecated from exchange response, vastXml takes priority.
-    if (bid.vastXml) {
-      window.IXOutstreamPlayer(bid.vastXml, bid.adUnitCode, config);
-    } else {
-      window.IXOutstreamPlayer(bid.vastUrl, bid.adUnitCode, config);
+  bid.renderer.push(function () {
+    const adUnitCode = bid.adUnitCode;
+    const divId = document.getElementById(adUnitCode) ? adUnitCode : getGptSlotInfoForAdUnitCode(adUnitCode).divId;
+    if (!divId) {
+      logWarn(`IX Bid Adapter: adUnitCode: ${divId} not found on page.`);
+      return;
     }
+    window.createIXPlayer(divId, bid);
   });
 }
 
@@ -1138,10 +1150,10 @@ function outstreamRenderer(bid) {
  * @param {string} id
  * @returns {Renderer}
  */
-function createRenderer(id) {
+function createRenderer(id, renderUrl) {
   const renderer = Renderer.install({
     id: id,
-    url: RENDERER_URL,
+    url: renderUrl,
     loaded: false
   });
 
@@ -1149,9 +1161,35 @@ function createRenderer(id) {
     renderer.setRender(outstreamRenderer);
   } catch (err) {
     logWarn('Prebid Error calling setRender on renderer', err);
+    return null;
+  }
+
+  if (!renderUrl) {
+    logWarn('Outstream renderer URL not found');
+    return null;
   }
 
   return renderer;
+}
+
+/**
+ * Returns whether our renderer could potentially be used.
+ * @param {*} bid bid object
+ */
+function isIndexRendererPreferred(bid) {
+  if (deepAccess(bid, 'mediaTypes.video.context') !== 'outstream') {
+    return false;
+  }
+
+  // ad unit renderer could be on the adUnit.mediaTypes.video level or adUnit level
+  let renderer = deepAccess(bid, 'mediaTypes.video.renderer');
+  if (!renderer) {
+    renderer = deepAccess(bid, 'renderer');
+  }
+
+  const isValid = !!(typeof (renderer) === 'object' && renderer.url && renderer.render);
+  // if renderer on the adunit is not valid or it's only a backup, our renderer may be used
+  return !isValid || renderer.backupOnly;
 }
 
 export const spec = {
@@ -1237,6 +1275,17 @@ export const spec = {
         return false;
       }
     }
+
+    const videoImp = bidToVideoImp(bid).video;
+    if (deepAccess(bid, 'mediaTypes.video.context') === OUTSTREAM && isIndexRendererPreferred(bid) && videoImp) {
+      const outstreamPlayerSize = deepAccess(videoImp, 'playerSize')[0];
+      const isValidSize = outstreamPlayerSize[0] >= OUTSTREAM_MINIMUM_PLAYER_SIZE[0] && outstreamPlayerSize[1] >= OUTSTREAM_MINIMUM_PLAYER_SIZE[1];
+      if (!isValidSize) {
+        logError(`IX Bid Adapter: ${mediaTypeVideoPlayerSize} is an invalid size for IX outstream renderer`);
+        return false;
+      }
+    }
+
     return true;
   },
 
@@ -1347,8 +1396,12 @@ export const spec = {
         const bidRequest = getBidRequest(innerBids[j].impid, requestBid.imp, bidderRequest.validBidRequests);
         bid = parseBid(innerBids[j], responseBody.cur, bidRequest);
 
-        if (!deepAccess(bid, 'mediaTypes.video.renderer') && deepAccess(bid, 'mediaTypes.video.context') === 'outstream') {
-          bid.renderer = createRenderer(innerBids[j].bidId);
+        if (bid.mediaType === VIDEO && isIndexRendererPreferred(bidRequest)) {
+          const renderUrl = deepAccess(responseBody, 'ext.videoplayerurl');
+          bid.renderer = createRenderer(innerBids[j].bidId, renderUrl);
+          if (!bid.renderer) {
+            continue;
+          }
         }
 
         bids.push(bid);
