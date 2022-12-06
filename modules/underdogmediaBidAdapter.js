@@ -1,182 +1,205 @@
-import { logMessage, flatten, parseSizesInput } from '../src/utils.js';
-import { config } from '../src/config.js';
-import { registerBidder } from '../src/adapters/bidderFactory.js';
-const BIDDER_CODE = 'underdogmedia';
-const UDM_ADAPTER_VERSION = '3.5V';
-const UDM_VENDOR_ID = '159';
-const prebidVersion = '$prebid.version$';
-let USER_SYNCED = false;
+import { createBid } from '../src/bidfactory.js'
+import adapterManager from '../src/adapterManager.js'
+import { insertElement, logMessage, logWarn } from '../src/utils.js'
 
-logMessage(`Initializing UDM Adapter. PBJS Version: ${prebidVersion} with adapter version: ${UDM_ADAPTER_VERSION}  Updated 20191028`);
+let _addBidResponse;
+let _done;
+let responsesProcessed = {};
+let UDM_ADAPTER_VERSION = '1.38-7.19.0C';
+let PREBID_VERSION = $$PREBID_GLOBAL$$.version;
+let PREBID_NAME = '$$PREBID_GLOBAL$$';
+let UDM_VENDOR_ID = '159';
+let LATEST_TEST_DATE = '2022-10-12';
 
-// helper function for testing user syncs
-export function resetUserSync() {
-  USER_SYNCED = false;
-}
+let UnderdogMediaAdapter = function UnderdogMediaAdapter() {
+  logMessage('Initializing UDM Adapter');
+  logMessage('Global Prebid Name: $$PREBID_GLOBAL$$');
+  logMessage(`PBJS Version: ${$$PREBID_GLOBAL$$.version}`);
+  logMessage(`UDM adapter version: ${UDM_ADAPTER_VERSION} Updated/tested: ${LATEST_TEST_DATE}`);
 
-export const spec = {
-  code: BIDDER_CODE,
-  bidParams: [],
+  let getJsStaticUrl = 'https://bid.underdog.media/udm_header_lib.js';
 
-  isBidRequestValid: function (bid) {
-    const bidSizes = bid.mediaTypes && bid.mediaTypes.banner && bid.mediaTypes.banner.sizes ? bid.mediaTypes.banner.sizes : bid.sizes;
-    return !!((bid.params && bid.params.siteId) && (bidSizes && bidSizes.length > 0));
-  },
+  $$PREBID_GLOBAL$$.handleUnderdogMediaCB = function () {};
 
-  buildRequests: function (validBidRequests, bidderRequest) {
-    var sizes = [];
-    var siteId = 0;
-
-    validBidRequests.forEach(bidParam => {
-      let bidParamSizes = bidParam.mediaTypes && bidParam.mediaTypes.banner && bidParam.mediaTypes.banner.sizes ? bidParam.mediaTypes.banner.sizes : bidParam.sizes;
-      sizes = flatten(sizes, parseSizesInput(bidParamSizes));
-      siteId = bidParam.params.siteId;
-    });
-
-    let data = {
-      tid: 1,
-      dt: 10,
-      sid: siteId,
-      sizes: sizes.join(','),
-      version: UDM_ADAPTER_VERSION
+  function _callBids(bidderRequest, addBidResponse, done) {
+    _addBidResponse = addBidResponse;
+    _done = done;
+    let gdpr = {
+      gdprApplies: false,
+      consentGiven: true,
+      consentData: '',
+      prebidConsentData: bidderRequest.gdprConsent
     }
-
     if (bidderRequest && bidderRequest.gdprConsent) {
       if (typeof bidderRequest.gdprConsent.gdprApplies !== 'undefined') {
-        data.gdprApplies = !!(bidderRequest.gdprConsent.gdprApplies);
+        gdpr.gdprApplies = !!(bidderRequest.gdprConsent.gdprApplies);
       }
-      if (bidderRequest.gdprConsent.vendorData && bidderRequest.gdprConsent.vendorData.vendorConsents &&
-        typeof bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID] !== 'undefined') {
-        data.consentGiven = !!(bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID]);
+      if (bidderRequest.gdprConsent.vendorData && bidderRequest.gdprConsent.vendorData.vendorConsents && typeof bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID] !== 'undefined') {
+        gdpr.consentGiven = !!(bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID]);
       }
       if (typeof bidderRequest.gdprConsent.consentString !== 'undefined') {
-        data.consentData = bidderRequest.gdprConsent.consentString;
+        gdpr.consentData = bidderRequest.gdprConsent.consentString;
+      }
+    }
+
+    if (!gdpr.gdprApplies || gdpr.consentGiven) {
+      if (typeof window.udm_header_lib === 'undefined') {
+        loadScript(getJsStaticUrl, function () {
+          bid(bidderRequest, gdpr);
+        });
+      } else {
+        bid(bidderRequest, gdpr);
+      }
+    } else {
+      let sid = bidderRequest.bids[0].params.siteId;
+      loadScript(`https://udmserve.net/udm/img.fetch?tid=1;dt=9;sid=${sid};gdprApplies=${gdpr.gdprApplies};consentGiven=${gdpr.consentGiven};`, function () {
+        logWarn('UDM Request Cancelled - No GDPR Consent');
+        _done();
+      })
+    }
+  }
+
+  function loadScript(url, callback) {
+    let script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.async = true;
+
+    // Execute a callback if necessary
+    if (callback && typeof callback === 'function') {
+      if (script.readyState) {
+        script.onreadystatechange = function () {
+          if (script.readyState === 'loaded' || script.readyState === 'complete') {
+            script.onreadystatechange = null;
+            callback();
+          }
+        };
+      } else {
+        script.onload = function () {
+          callback();
+        };
+      }
+    }
+    script.src = url;
+
+    // add the new script tag to the page
+    insertElement(script);
+  }
+
+  function bid(bidderRequest, gdpr) {
+    responsesProcessed[bidderRequest.auctionId] = 0;
+    let bids = bidderRequest.bids;
+    let mappedBids = [];
+    for (let i = 0; i < bids.length; i++) {
+      let bidRequest = bids[i];
+      let callback = bidResponseCallback(bidRequest, bids.length);
+      let bidRequestSizes = bidRequest.mediaTypes && bidRequest.mediaTypes.banner && bidRequest.mediaTypes.banner.sizes ? bidRequest.mediaTypes.banner.sizes : bidRequest.sizes;
+      mappedBids.push({
+        auctionId: bidRequest.auctionId,
+        auctionStart: bidderRequest.auctionStart,
+        auctionTimeout: bidderRequest.timeout,
+        bidder: bidRequest.bidder,
+        sizes: bidRequestSizes,
+        siteId: bidRequest.params.siteId,
+        bidfloor: bidRequest.params.bidfloor,
+        adunitcode: bidRequest.adUnitCode,
+        placementCode: bidRequest.adUnitCode,
+        divId: bidRequest.params.divId,
+        subId: bidRequest.params.subId,
+        callback: callback,
+        uspConsent: bidderRequest.uspConsent
+      });
+    }
+
+    if (window.udm_header_lib.storePubPrebidInfo) {
+      window.udm_header_lib.storePubPrebidInfo({
+        adapterVersion: UDM_ADAPTER_VERSION,
+        prebidName: PREBID_NAME,
+        prebidVersion: PREBID_VERSION
+      })
+    }
+
+    if (gdpr.gdprApplies) {
+      if (window.udm_header_lib.storeGDPRConsentData) {
+        window.udm_header_lib.storeGDPRConsentData(gdpr)
       }
     }
 
     if (bidderRequest.uspConsent) {
-      data.uspConsent = bidderRequest.uspConsent;
+      if (window.udm_header_lib.storeUSPConsentData) {
+        window.udm_header_lib.storeUSPConsentData(bidderRequest.uspConsent)
+      }
     }
 
-    if (!data.gdprApplies || data.consentGiven) {
-      return {
-        method: 'GET',
-        url: 'https://udmserve.net/udm/img.fetch',
-        data: data,
-        bidParams: validBidRequests
-      };
+    let udmBidRequest = new window.udm_header_lib.BidRequestArray(mappedBids);
+    udmBidRequest.send();
+  }
+
+  function bidResponseCallback(bid, bids) {
+    return function (bidResponse) {
+      bidResponseAvailable(bid, bidResponse, bids);
+    };
+  }
+
+  function bidResponseAvailable(bidRequest, bidResponse, bids) {
+    if (bidResponse.bids.length > 0) {
+      for (let i = 0; i < bidResponse.bids.length; i++) {
+        let udmBid = bidResponse.bids[i];
+        let bid = createBid(1, bidRequest);
+        if (udmBid.udmDebug) {
+          bid.udmDebug = udmBid.udmDebug;
+        }
+        bid.requestId = bidRequest.bidId;
+        bid.cpm = udmBid.cpm;
+        bid.width = udmBid.width;
+        bid.height = udmBid.height;
+        bid.ttl = udmBid.ttl || 60;
+        bid.netRevenue = false;
+        bid.currency = 'USD';
+        bid.bidderCode = bidRequest.bidder;
+        bid.auctionId = bidRequest.auctionId;
+        bid.adUnitCode = bidRequest.adUnitCode;
+        bid.trueBidder = udmBid.bidderCode;
+        bid.creativeId = udmBid.creativeId;
+        bid.meta = {} // internals are throwing an error related to dchain since it assumes meta existence
+
+        if (udmBid.ad_url !== undefined) {
+          bid.adUrl = udmBid.ad_url;
+        } else if (udmBid.ad_html !== undefined) {
+          bid.ad = udmBid.ad_html.replace('UDM_ADAPTER_VERSION', 'P_' + PREBID_VERSION + '_A_' + UDM_ADAPTER_VERSION);
+        } else {
+          logMessage('Underdogmedia bid is lacking both ad_url and ad_html, skipping bid');
+          continue;
+        }
+        _addBidResponse(bidRequest.adUnitCode, bid);
+      }
+    } else {
+      let nobid = createBid(2, bidRequest);
+      nobid.bidderCode = bidRequest.bidder;
+      nobid.meta = {} // internals are throwing an error related to dchain since it assumes meta existence
+      _addBidResponse(bidRequest.adUnitCode, nobid);
     }
-  },
-
-  getUserSyncs: function (syncOptions, serverResponses) {
-    if (!USER_SYNCED && serverResponses.length > 0 && serverResponses[0].body && serverResponses[0].body.userSyncs && serverResponses[0].body.userSyncs.length > 0) {
-      USER_SYNCED = true;
-      const userSyncs = serverResponses[0].body.userSyncs;
-      const syncs = userSyncs.filter(sync => {
-        const {type} = sync;
-        if (syncOptions.iframeEnabled && type === 'iframe') {
-          return true
-        }
-        if (syncOptions.pixelEnabled && type === 'image') {
-          return true
-        }
-      })
-      return syncs;
+    responsesProcessed[bidRequest.auctionId]++;
+    if (responsesProcessed[bidRequest.auctionId] >= bids) {
+      delete responsesProcessed[bidRequest.auctionId];
+      _done();
     }
-  },
+  }
 
-  interpretResponse: function (serverResponse, bidRequest) {
-    const bidResponses = [];
-    bidRequest.bidParams.forEach(bidParam => {
-      serverResponse.body.mids.forEach(mid => {
-        if (mid.useCount > 0) {
-          return;
-        }
+  function getSpec() {
+    return {
+      onBidWon: (bid) => {
+        logMessage('Underdog Media onBidWon Event', bid);
+      },
+      onSetTargeting: (bid) => {
+        logMessage('Underdog Media onSetTargeting Event', bid);
+      }
+    }
+  }
 
-        if (!mid.useCount) {
-          mid.useCount = 0;
-        }
-
-        var sizeNotFound = true;
-        const bidParamSizes = bidParam.mediaTypes && bidParam.mediaTypes.banner && bidParam.mediaTypes.banner.sizes ? bidParam.mediaTypes.banner.sizes : bidParam.sizes;
-        parseSizesInput(bidParamSizes).forEach(size => {
-          if (size === mid.width + 'x' + mid.height) {
-            sizeNotFound = false;
-          }
-        });
-
-        if (sizeNotFound) {
-          return;
-        }
-
-        const bidResponse = {
-          requestId: bidParam.bidId,
-          bidderCode: spec.code,
-          cpm: parseFloat(mid.cpm),
-          width: mid.width,
-          height: mid.height,
-          ad: mid.ad_code_html,
-          creativeId: mid.mid,
-          currency: 'USD',
-          netRevenue: false,
-          ttl: mid.ttl || 60,
-          meta: {
-            advertiserDomains: mid.advertiser_domains || []
-          }
-        };
-
-        if (bidResponse.cpm <= 0) {
-          return;
-        }
-        if (bidResponse.ad.length <= 0) {
-          return;
-        }
-
-        mid.useCount++;
-
-        bidResponse.ad += makeNotification(bidResponse, mid, bidParam);
-
-        bidResponses.push(bidResponse);
-      });
-    });
-
-    return bidResponses;
-  },
+  return {
+    callBids: _callBids,
+    getSpec: getSpec
+  };
 };
 
-function makeNotification(bid, mid, bidParam) {
-  let url = mid.notification_url;
-
-  const versionIndex = url.indexOf(';version=')
-  if (versionIndex + 1) {
-    url = url.substring(0, versionIndex)
-  }
-
-  url += `;version=${UDM_ADAPTER_VERSION}`;
-  url += ';cb=' + Math.random();
-  url += ';qqq=' + (1 / bid.cpm);
-  url += ';hbt=' + config.getConfig('_bidderTimeout');
-  url += ';style=adapter';
-  url += ';vis=' + encodeURIComponent(document.visibilityState);
-
-  url += ';traffic_info=' + encodeURIComponent(JSON.stringify(getUrlVars()));
-  if (bidParam.params.subId) {
-    url += ';subid=' + encodeURIComponent(bidParam.params.subId);
-  }
-  return '<script async src="' + url + '"></script>';
-}
-
-function getUrlVars() {
-  var vars = {};
-  var hash;
-  var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
-  for (var i = 0; i < hashes.length; i++) {
-    hash = hashes[i].split('=');
-    if (hash[0].match(/^utm_/)) {
-      vars[hash[0]] = hash[1].substr(0, 150);
-    }
-  }
-  return vars;
-}
-
-registerBidder(spec);
+adapterManager.registerBidAdapter(new UnderdogMediaAdapter(), 'underdogmedia');
