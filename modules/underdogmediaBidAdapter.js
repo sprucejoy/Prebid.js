@@ -1,401 +1,207 @@
-import {
-  deepAccess,
-  flatten,
-  getWindowSelf,
-  getWindowTop,
-  isGptPubadsDefined,
-  isSlotMatchingAdUnitCode,
-  logInfo,
-  logMessage,
-  logWarn,
-  parseSizesInput
-} from '../src/utils.js';
-import {config} from '../src/config.js';
-import {registerBidder} from '../src/adapters/bidderFactory.js';
+import { createBid } from '../src/bidfactory.js'
+import adapterManager from '../src/adapterManager.js'
+import { insertElement, logMessage, logWarn } from '../src/utils.js'
+import { getGlobal } from '../src/prebidGlobal.js';
 
-const BIDDER_CODE = 'underdogmedia';
-const UDM_ADAPTER_VERSION = '7.30V';
-const UDM_VENDOR_ID = '159';
-const prebidVersion = '$prebid.version$';
-const NON_MEASURABLE = -1;
-const PRODUCT = {
-  standard: 1,
-  sticky: 2
-}
+let _addBidResponse;
+let _done;
+let responsesProcessed = {};
+const prebidInstance = getGlobal()
+let UDM_ADAPTER_VERSION = '7.43.0-8.6.0C';
+let PREBID_VERSION = prebidInstance.version;
+let PREBID_NAME = '$$PREBID_GLOBAL$$';
+let UDM_VENDOR_ID = '159';
+let LATEST_TEST_DATE = '2023-08-04';
 
-let USER_SYNCED = false;
+let UnderdogMediaAdapter = function UnderdogMediaAdapter() {
+  logMessage('Initializing UDM Adapter');
+  logMessage('Global Prebid Name: $$PREBID_GLOBAL$$');
+  logMessage(`PBJS Version: ${prebidInstance.version}`);
+  logMessage(`UDM adapter version: ${UDM_ADAPTER_VERSION} Updated/tested: ${LATEST_TEST_DATE}`);
 
-logMessage(`Initializing UDM Adapter. PBJS Version: ${prebidVersion} with adapter version: ${UDM_ADAPTER_VERSION}  Updated 2023 01 26`);
+  let getJsStaticUrl = 'https://bid.underdog.media/udm_header_lib.js';
 
-// helper function for testing user syncs
-export function resetUserSync() {
-  USER_SYNCED = false;
-}
+  prebidInstance.handleUnderdogMediaCB = function () {};
 
-export const spec = {
-  NON_MEASURABLE,
-  code: BIDDER_CODE,
-  bidParams: [],
-
-  isBidRequestValid: function (bid) {
-    if (!bid.params) {
-      logWarn('[Underdog Media] bid params are missing')
-      return false;
+  function _callBids(bidderRequest, addBidResponse, done) {
+    _addBidResponse = addBidResponse;
+    _done = done;
+    let gdpr = {
+      gdprApplies: false,
+      consentGiven: true,
+      consentData: '',
+      prebidConsentData: bidderRequest.gdprConsent
     }
-
-    if (!bid.params.siteId) {
-      logWarn('[Underdog Media] siteId is missing')
-      return false;
-    }
-
-    if (bid.params.productId) {
-      if (!PRODUCT[bid.params.productId]) {
-        logWarn('[Underdog Media] invalid productId')
-        return false;
-      }
-    }
-
-    const bidSizes = bid.mediaTypes && bid.mediaTypes.banner && bid.mediaTypes.banner.sizes ? bid.mediaTypes.banner.sizes : bid.sizes;
-    if (!bidSizes || bidSizes.length < 1) {
-      logWarn('[Underdog Media] bid sizes are missing')
-      return false;
-    }
-
-    return true;
-  },
-
-  buildRequests: function (validBidRequests, bidderRequest) {
-    var sizes = [];
-    var siteId = 0;
-
-    let data = {
-      dt: 10,
-      gdpr: {},
-      pbTimeout: config.getConfig('bidderTimeout'),
-      pbjsVersion: prebidVersion,
-      placements: [],
-      ref: deepAccess(bidderRequest, 'refererInfo.page') ? bidderRequest.refererInfo.page : undefined,
-      usp: {},
-      userIds: {
-        '33acrossId': deepAccess(validBidRequests[0], 'userId.33acrossId.envelope') ? validBidRequests[0].userId['33acrossId'].envelope : undefined,
-        pubcid: deepAccess(validBidRequests[0], 'crumbs.pubcid') ? validBidRequests[0].crumbs.pubcid : undefined,
-        unifiedId: deepAccess(validBidRequests[0], 'userId.tdid') ? validBidRequests[0].userId.tdid : undefined
-      },
-      version: UDM_ADAPTER_VERSION
-    }
-
-    validBidRequests.forEach(bidParam => {
-      let placementObject = {}
-      let bidParamSizes = bidParam.mediaTypes && bidParam.mediaTypes.banner && bidParam.mediaTypes.banner.sizes ? bidParam.mediaTypes.banner.sizes : bidParam.sizes;
-      sizes = flatten(sizes, parseSizesInput(bidParamSizes));
-      siteId = +bidParam.params.siteId;
-      let adUnitCode = bidParam.adUnitCode
-      let element = _getAdSlotHTMLElement(adUnitCode)
-      let minSize = _getMinSize(bidParamSizes)
-
-      placementObject.sizes = parseSizesInput(bidParamSizes)
-      placementObject.adUnitCode = adUnitCode
-      placementObject.productId = PRODUCT[bidParam.params.productId] || PRODUCT.standard
-      if (deepAccess(bidParam, 'params.productId')) {
-        if (bidParam.params.productId === 'standard') {
-          placementObject.productId = 1
-        } else if (bidParam.params.productId === 'adhesion') {
-          placementObject.productId = 2
-        }
-      } else {
-        placementObject.productId = 1
-      }
-      placementObject.gpid = deepAccess(bidParam, 'ortb2Imp.ext.gpid') ? bidParam.ortb2Imp.ext.gpid : undefined
-
-      if (_isViewabilityMeasurable(element)) {
-        const minSizeObj = {
-          w: minSize[0],
-          h: minSize[1]
-        }
-        let viewPercentage = Math.round(_getViewability(element, getWindowTop(), minSizeObj))
-        placementObject.viewability = viewPercentage
-      } else {
-        placementObject.viewability = NON_MEASURABLE
-      }
-
-      data.placements.push(placementObject)
-    });
-
-    data.sid = siteId
-
     if (bidderRequest && bidderRequest.gdprConsent) {
       if (typeof bidderRequest.gdprConsent.gdprApplies !== 'undefined') {
-        data.gdpr.gdprApplies = !!(bidderRequest.gdprConsent.gdprApplies);
+        gdpr.gdprApplies = !!(bidderRequest.gdprConsent.gdprApplies);
       }
-      if (bidderRequest.gdprConsent.vendorData && bidderRequest.gdprConsent.vendorData.vendorConsents &&
-        typeof bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID] !== 'undefined') {
-        data.gdpr.consentGiven = !!(bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID]);
+      if (bidderRequest.gdprConsent.vendorData && bidderRequest.gdprConsent.vendorData.vendorConsents && typeof bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID] !== 'undefined') {
+        gdpr.consentGiven = !!(bidderRequest.gdprConsent.vendorData.vendorConsents[UDM_VENDOR_ID]);
       }
       if (typeof bidderRequest.gdprConsent.consentString !== 'undefined') {
-        data.gdpr.consentData = bidderRequest.gdprConsent.consentString;
+        gdpr.consentData = bidderRequest.gdprConsent.consentString;
+      }
+    }
+
+    if (!gdpr.gdprApplies || gdpr.consentGiven) {
+      if (typeof window.udm_header_lib === 'undefined') {
+        loadScript(getJsStaticUrl, function () {
+          bid(bidderRequest, gdpr);
+        });
+      } else {
+        bid(bidderRequest, gdpr);
+      }
+    } else {
+      let sid = bidderRequest.bids[0].params.siteId;
+      loadScript(`https://udmserve.net/udm/img.fetch?tid=1;dt=9;sid=${sid};gdprApplies=${gdpr.gdprApplies};consentGiven=${gdpr.consentGiven};`, function () {
+        logWarn('UDM Request Cancelled - No GDPR Consent');
+        _done();
+      })
+    }
+  }
+
+  function loadScript(url, callback) {
+    let script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.async = true;
+
+    // Execute a callback if necessary
+    if (callback && typeof callback === 'function') {
+      if (script.readyState) {
+        script.onreadystatechange = function () {
+          if (script.readyState === 'loaded' || script.readyState === 'complete') {
+            script.onreadystatechange = null;
+            callback();
+          }
+        };
+      } else {
+        script.onload = function () {
+          callback();
+        };
+      }
+    }
+    script.src = url;
+
+    // add the new script tag to the page
+    insertElement(script);
+  }
+
+  function bid(bidderRequest, gdpr) {
+    responsesProcessed[bidderRequest.auctionId] = 0;
+    let bids = bidderRequest.bids;
+    let mappedBids = [];
+    for (let i = 0; i < bids.length; i++) {
+      let bidRequest = bids[i];
+      let callback = bidResponseCallback(bidRequest, bids.length);
+      let bidRequestSizes = bidRequest.mediaTypes && bidRequest.mediaTypes.banner && bidRequest.mediaTypes.banner.sizes ? bidRequest.mediaTypes.banner.sizes : bidRequest.sizes;
+      mappedBids.push({
+        auctionId: bidRequest.auctionId,
+        auctionStart: bidderRequest.auctionStart,
+        auctionTimeout: bidderRequest.timeout,
+        bidder: bidRequest.bidder,
+        sizes: bidRequestSizes,
+        siteId: bidRequest.params.siteId,
+        bidfloor: bidRequest.params.bidfloor,
+        adunitcode: bidRequest.adUnitCode,
+        placementCode: bidRequest.adUnitCode,
+        divId: bidRequest.params.divId,
+        subId: bidRequest.params.subId,
+        callback: callback,
+        uspConsent: bidderRequest.uspConsent
+      });
+    }
+
+    if (window.udm_header_lib.storePubPrebidInfo) {
+      window.udm_header_lib.storePubPrebidInfo({
+        adapterVersion: UDM_ADAPTER_VERSION,
+        prebidName: PREBID_NAME,
+        prebidVersion: PREBID_VERSION
+      })
+    }
+
+    if (gdpr.gdprApplies) {
+      if (window.udm_header_lib.storeGDPRConsentData) {
+        window.udm_header_lib.storeGDPRConsentData(gdpr)
       }
     }
 
     if (bidderRequest.uspConsent) {
-      data.usp.uspConsent = bidderRequest.uspConsent;
+      if (window.udm_header_lib.storeUSPConsentData) {
+        window.udm_header_lib.storeUSPConsentData(bidderRequest.uspConsent)
+      }
     }
 
-    if (!data.gdpr || !data.gdpr.gdprApplies || data.gdpr.consentGiven) {
-      return {
-        method: 'POST',
-        url: `https://udmserve.net/udm/img.fetch?sid=${siteId}`,
-        data: data,
-        bidParams: validBidRequests
-      };
+    let udmBidRequest = new window.udm_header_lib.BidRequestArray(mappedBids);
+    udmBidRequest.send();
+  }
+
+  function bidResponseCallback(bid, bids) {
+    return function (bidResponse) {
+      bidResponseAvailable(bid, bidResponse, bids);
+    };
+  }
+
+  function bidResponseAvailable(bidRequest, bidResponse, bids) {
+    if (bidResponse.bids.length > 0) {
+      for (let i = 0; i < bidResponse.bids.length; i++) {
+        let udmBid = bidResponse.bids[i];
+        let bid = createBid(1, bidRequest);
+        if (udmBid.udmDebug) {
+          bid.udmDebug = udmBid.udmDebug;
+        }
+        bid.requestId = bidRequest.bidId;
+        bid.cpm = udmBid.cpm;
+        bid.width = udmBid.width;
+        bid.height = udmBid.height;
+        bid.ttl = udmBid.ttl || 60;
+        bid.netRevenue = false;
+        bid.currency = 'USD';
+        bid.bidderCode = bidRequest.bidder;
+        bid.auctionId = bidRequest.auctionId;
+        bid.adUnitCode = bidRequest.adUnitCode;
+        bid.trueBidder = udmBid.bidderCode;
+        bid.creativeId = udmBid.creativeId;
+        bid.meta = {} // internals are throwing an error related to dchain since it assumes meta existence
+
+        if (udmBid.ad_url !== undefined) {
+          bid.adUrl = udmBid.ad_url;
+        } else if (udmBid.ad_html !== undefined) {
+          bid.ad = udmBid.ad_html.replace('UDM_ADAPTER_VERSION', 'P_' + PREBID_VERSION + '_A_' + UDM_ADAPTER_VERSION);
+        } else {
+          logMessage('Underdogmedia bid is lacking both ad_url and ad_html, skipping bid');
+          continue;
+        }
+        _addBidResponse(bidRequest.adUnitCode, bid);
+      }
+    } else {
+      let nobid = createBid(2, bidRequest);
+      nobid.bidderCode = bidRequest.bidder;
+      nobid.meta = {} // internals are throwing an error related to dchain since it assumes meta existence
+      _addBidResponse(bidRequest.adUnitCode, nobid);
     }
-  },
-
-  getUserSyncs: function (syncOptions, serverResponses) {
-    if (!USER_SYNCED && serverResponses.length > 0 && serverResponses[0].body && serverResponses[0].body.userSyncs && serverResponses[0].body.userSyncs.length > 0) {
-      USER_SYNCED = true;
-      const userSyncs = serverResponses[0].body.userSyncs;
-      const syncs = userSyncs.filter(sync => {
-        const {
-          type
-        } = sync;
-        if (syncOptions.iframeEnabled && type === 'iframe') {
-          return true
-        }
-        if (syncOptions.pixelEnabled && type === 'image') {
-          return true
-        }
-      })
-      return syncs;
-    }
-  },
-
-  interpretResponse: function (serverResponse, bidRequest) {
-    const bidResponses = [];
-    const mids = serverResponse.body.mids
-    mids.forEach(mid => {
-      const bidParam = bidRequest.bidParams.find((bidParam) => {
-        if (mid.ad_unit_code === bidParam.adUnitCode) {
-          return true
-        }
-      })
-
-      if (!bidParam) {
-        return
-      }
-
-      const bidResponse = {
-        requestId: bidParam.bidId,
-        bidderCode: spec.code,
-        cpm: parseFloat(mid.cpm),
-        width: mid.width,
-        height: mid.height,
-        ad: mid.ad_code_html,
-        creativeId: mid.mid,
-        currency: 'USD',
-        netRevenue: false,
-        ttl: mid.ttl || 300,
-        meta: {
-          advertiserDomains: mid.advertiser_domains || []
-        }
-      };
-
-      if (bidResponse.cpm <= 0) {
-        return;
-      }
-      if (bidResponse.ad.length <= 0) {
-        return;
-      }
-
-      bidResponse.ad += makeNotification(bidResponse, mid, bidParam);
-
-      bidResponses.push(bidResponse);
-    });
-
-    return bidResponses;
-  },
-};
-
-function _getMinSize(bidParamSizes) {
-  return bidParamSizes.reduce((min, size) => size.h * size.w < min.h * min.w ? size : min)
-}
-
-function _getAdSlotHTMLElement(adUnitCode) {
-  return document.getElementById(adUnitCode) ||
-    document.getElementById(_mapAdUnitPathToElementId(adUnitCode));
-}
-
-function _mapAdUnitPathToElementId(adUnitCode) {
-  if (isGptPubadsDefined()) {
-    // eslint-disable-next-line no-undef
-    const adSlots = googletag.pubads().getSlots();
-    const isMatchingAdSlot = isSlotMatchingAdUnitCode(adUnitCode);
-
-    for (let i = 0; i < adSlots.length; i++) {
-      if (isMatchingAdSlot(adSlots[i])) {
-        const id = adSlots[i].getSlotElementId();
-
-        logInfo(`[Underdogmedia Adapter] Map ad unit path to HTML element id: '${adUnitCode}' -> ${id}`);
-
-        return id;
-      }
+    responsesProcessed[bidRequest.auctionId]++;
+    if (responsesProcessed[bidRequest.auctionId] >= bids) {
+      delete responsesProcessed[bidRequest.auctionId];
+      _done();
     }
   }
 
-  logWarn(`[Underdogmedia Adapter] Unable to locate element for ad unit code: '${adUnitCode}'`);
-
-  return null;
-}
-
-function _isViewabilityMeasurable(element) {
-  return !_isIframe() && element !== null
-}
-
-function _isIframe() {
-  try {
-    return getWindowSelf() !== getWindowTop();
-  } catch (e) {
-    return true;
-  }
-}
-
-function _getViewability(element, topWin, {
-  w,
-  h
-} = {}) {
-  return topWin.document.visibilityState === 'visible'
-    ? _getPercentInView(element, topWin, {
-      w,
-      h
-    })
-    : 0
-}
-
-function _getPercentInView(element, topWin, {
-  w,
-  h
-} = {}) {
-  const elementBoundingBox = _getBoundingBox(element, {
-    w,
-    h
-  });
-
-  // Obtain the intersection of the element and the viewport
-  const elementInViewBoundingBox = _getIntersectionOfRects([{
-    left: 0,
-    top: 0,
-    right: topWin.innerWidth,
-    bottom: topWin.innerHeight
-  }, elementBoundingBox]);
-
-  let elementInViewArea,
-    elementTotalArea;
-
-  if (elementInViewBoundingBox !== null) {
-    // Some or all of the element is in view
-    elementInViewArea = elementInViewBoundingBox.width * elementInViewBoundingBox.height;
-    elementTotalArea = elementBoundingBox.width * elementBoundingBox.height;
-
-    return ((elementInViewArea / elementTotalArea) * 100);
-  }
-
-  // No overlap between element and the viewport; therefore, the element
-  // lies completely out of view
-  return 0;
-}
-
-function _getBoundingBox(element, {
-  w,
-  h
-} = {}) {
-  let {
-    width,
-    height,
-    left,
-    top,
-    right,
-    bottom
-  } = element.getBoundingClientRect();
-
-  if ((width === 0 || height === 0) && w && h) {
-    width = w;
-    height = h;
-    right = left + w;
-    bottom = top + h;
+  function getSpec() {
+    return {
+      onBidWon: (bid) => {
+        logMessage('Underdog Media onBidWon Event', bid);
+      },
+      onSetTargeting: (bid) => {
+        logMessage('Underdog Media onSetTargeting Event', bid);
+      }
+    }
   }
 
   return {
-    width,
-    height,
-    left,
-    top,
-    right,
-    bottom
+    callBids: _callBids,
+    getSpec: getSpec
   };
-}
+};
 
-function _getIntersectionOfRects(rects) {
-  const bbox = {
-    left: rects[0].left,
-    right: rects[0].right,
-    top: rects[0].top,
-    bottom: rects[0].bottom
-  };
-
-  for (let i = 1; i < rects.length; ++i) {
-    bbox.left = Math.max(bbox.left, rects[i].left);
-    bbox.right = Math.min(bbox.right, rects[i].right);
-
-    if (bbox.left >= bbox.right) {
-      return null;
-    }
-
-    bbox.top = Math.max(bbox.top, rects[i].top);
-    bbox.bottom = Math.min(bbox.bottom, rects[i].bottom);
-
-    if (bbox.top >= bbox.bottom) {
-      return null;
-    }
-  }
-
-  bbox.width = bbox.right - bbox.left;
-  bbox.height = bbox.bottom - bbox.top;
-
-  return bbox;
-}
-
-function makeNotification(bid, mid, bidParam) {
-  let url = mid.notification_url;
-
-  const versionIndex = url.indexOf(';version=')
-  if (versionIndex + 1) {
-    url = url.substring(0, versionIndex)
-  }
-
-  url += `;version=${UDM_ADAPTER_VERSION}`;
-  url += ';cb=' + Math.random();
-  url += ';qqq=' + (1 / bid.cpm);
-  url += ';hbt=' + config.getConfig('bidderTimeout');
-  url += ';style=adapter';
-  url += ';vis=' + encodeURIComponent(document.visibilityState);
-
-  url += ';traffic_info=' + encodeURIComponent(JSON.stringify(getUrlVars()));
-  if (bidParam.params.subId) {
-    url += ';subid=' + encodeURIComponent(bidParam.params.subId);
-  }
-  return '<script async src="' + url + '"></script>';
-}
-
-function getUrlVars() {
-  var vars = {};
-  var hash;
-  var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
-  for (var i = 0; i < hashes.length; i++) {
-    hash = hashes[i].split('=');
-    if (hash[0].match(/^utm_/)) {
-      vars[hash[0]] = hash[1].substr(0, 150);
-    }
-  }
-  return vars;
-}
-
-registerBidder(spec);
+adapterManager.registerBidAdapter(new UnderdogMediaAdapter(), 'underdogmedia');
